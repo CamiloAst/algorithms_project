@@ -1,111 +1,121 @@
+import os
+import time
 import pandas as pd
 import requests
-import matplotlib.pyplot as plt
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
-# Configuración de las APIs
-SCIENCEDIRECT_API_KEY = '612aaafc590a9e81ffa39c1583078cb6'
-IEEE_API_KEY = '4cspzswadt62jh7f6dbkcq3z'
-BASE_URL_SCIENCEDIRECT = 'https://api.elsevier.com/content/search/scopus'
-BASE_URL_IEEE = 'https://ieeexploreapi.ieee.org/api/v1/search/articles'
-BASE_URL_CROSSREF = 'https://api.crossref.org/works'
+# Configuración de Selenium para Edge
+options = webdriver.EdgeOptions()
+options.add_argument('--headless')  # Ejecutar en segundo plano
+options.add_argument('--disable-gpu')
+options.add_argument('--no-sandbox')
+options.add_experimental_option("prefs", {"download.default_directory": os.path.abspath("downloads")})
 
-
-# Función para buscar artículos en ScienceDirect
-def search_sciencedirect(query, count=10):
-    headers = {'X-ELS-APIKey': SCIENCEDIRECT_API_KEY, 'Accept': 'application/json'}
-    params = {'query': query, 'count': count}
-    response = requests.get(BASE_URL_SCIENCEDIRECT, headers=headers, params=params)
-
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Error {response.status_code} en ScienceDirect: {response.text}")
-        return None
+# Inicializar WebDriver para Edge
+driver = webdriver.Edge(service=Service(EdgeChromiumDriverManager().install()), options=options)
 
 
-# Función para buscar artículos en IEEE Xplore
-def search_ieee(query, count=10):
-    if IEEE_API_KEY == 'TU_API_KEY_IEEE':
-        print("Error: La API Key de IEEE Xplore está inactiva o no es válida.")
-        return None
+# Función para realizar scraping en ScienceDirect
+def scrape_sciencedirect(query, max_articles=10000):
+    url = f"https://www.sciencedirect.com/search?qs={query.replace(' ', '%20')}"
+    driver.get(url)
+    time.sleep(5)  # Aumentar tiempo de espera para carga completa
 
-    params = {'apikey': IEEE_API_KEY, 'querytext': query, 'max_records': count, 'format': 'json'}
-    response = requests.get(BASE_URL_IEEE, params=params)
-
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Error {response.status_code} en IEEE Xplore: {response.text}")
-        return None
-
-
-# Función para buscar artículos en CrossRef (incluye artículos de SAGE)
-def search_crossref(query, count=10):
-    params = {'query': query, 'rows': count}
-    response = requests.get(BASE_URL_CROSSREF, params=params)
-
-    if response.status_code == 200:
-        return response.json()
-    else:
-        print(f"Error {response.status_code} en CrossRef: {response.text}")
-        return None
-
-
-# Función para extraer datos relevantes de ScienceDirect
-def extract_articles_sciencedirect(data):
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
     articles = []
-    if 'search-results' in data and 'entry' in data['search-results']:
-        for entry in data['search-results']['entry']:
-            articles.append({
-                'Title': entry.get('dc:title', 'N/A'),
-                'Authors': entry.get('dc:creator', 'N/A'),
-                'Year': entry.get('prism:coverDate', 'N/A')[:4],
-                'DOI': entry.get('prism:doi', 'N/A'),
-                'Journal': entry.get('prism:publicationName', 'N/A'),
-                'Abstract': entry.get('dc:description', 'N/A'),
-                'Source': 'ScienceDirect'
-            })
+
+    for article in soup.select('.result-item-content')[:max_articles]:
+        title_elem = article.find('h2')
+        link_elem = article.find('a')
+
+        title = title_elem.get_text(strip=True) if title_elem else 'N/A'
+        link = 'https://www.sciencedirect.com' + link_elem['href'] if link_elem else 'N/A'
+
+        if title != 'N/A' and link != 'N/A':
+            articles.append({'Title': title, 'Link': link, 'Source': 'ScienceDirect'})
+
     return pd.DataFrame(articles)
 
 
-# Función para extraer datos relevantes de CrossRef
-def extract_articles_crossref(data):
-    articles = []
-    if 'message' in data and 'items' in data['message']:
-        for entry in data['message']['items']:
-            authors = entry.get('author', [])
-            author_names = ', '.join([
-                (author.get('given', '') + ' ' + author.get('family', '')).strip()
-                for author in authors if 'family' in author
-            ])
+# Función para realizar scraping en IEEE Xplore
+def scrape_ieee(query, max_articles=10000):
+    url = f"https://ieeexplore.ieee.org/search/searchresult.jsp?queryText={query.replace(' ', '%20')}"
+    driver.get(url)
+    time.sleep(5)
 
-            articles.append({
-                'Title': entry.get('title', ['N/A'])[0],
-                'Authors': author_names if author_names else 'N/A',
-                'Year': entry.get('published-print', {}).get('date-parts', [['N/A']])[0][0],
-                'DOI': entry.get('DOI', 'N/A'),
-                'Journal': entry.get('container-title', ['N/A'])[0],
-                'Abstract': entry.get('abstract', 'N/A'),
-                'Source': 'CrossRef'
-            })
+    soup = BeautifulSoup(driver.page_source, 'html.parser')
+    articles = []
+
+    for article in soup.select('.List-results-items')[:max_articles]:
+        title_elem = article.find('h3')
+        link_elem = article.find('a')
+
+        title = title_elem.get_text(strip=True) if title_elem else 'N/A'
+        link = 'https://ieeexplore.ieee.org' + link_elem['href'] if link_elem else 'N/A'
+
+        if title != 'N/A' and link != 'N/A':
+            articles.append({'Title': title, 'Link': link, 'Source': 'IEEE Xplore'})
+
     return pd.DataFrame(articles)
 
 
-# Consulta de ejemplo
+# Función para descargar PDFs con Selenium
+def download_pdfs(df, download_path='downloads'):
+    if not os.path.exists(download_path):
+        os.makedirs(download_path)
+
+    for index, row in df.iterrows():
+        pdf_page_url = row['Link']
+        driver.get(pdf_page_url)
+        time.sleep(5)
+
+        try:
+            # Esperar que el botón de descarga aparezca
+            download_button = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//a[contains(text(), 'Download PDF')]"))
+            )
+
+            pdf_url = download_button.get_attribute("href")
+            if pdf_url and 'pdf' in pdf_url:
+                response = requests.get(pdf_url, timeout=10)
+                if response.status_code == 200:
+                    file_path = os.path.join(download_path, f"{index}.pdf")
+                    with open(file_path, 'wb') as file:
+                        file.write(response.content)
+                    print(f"Descargado: {file_path}")
+                else:
+                    print(f"No se pudo descargar el PDF desde: {pdf_url}")
+            else:
+                print(f"No se encontró enlace directo al PDF en: {pdf_page_url}")
+        except Exception as e:
+            print(f"Error al descargar PDF de {pdf_page_url}: {str(e)}")
+
+
+# Ejecutar scraping
 query = "computational thinking"
+df_science = scrape_sciencedirect(query, max_articles=10000)
+df_ieee = scrape_ieee(query, max_articles=10000)
 
-science_direct_data = search_sciencedirect(query, count=20)
-ieee_data = search_ieee(query, count=20)
-crossref_data = search_crossref(query, count=20)
+df_all = pd.concat([df_science, df_ieee], ignore_index=True)
 
-df_science = extract_articles_sciencedirect(science_direct_data) if science_direct_data else pd.DataFrame()
-df_crossref = extract_articles_crossref(crossref_data) if crossref_data else pd.DataFrame()
+df_unique = df_all.drop_duplicates(subset=['Title', 'Link'], keep='first')
+df_duplicates = df_all[df_all.duplicated(subset=['Title', 'Link'], keep=False)]
 
-df_all = pd.concat([df_science, df_crossref], ignore_index=True)
-df_clean, df_duplicates = df_all.drop_duplicates(subset=['Title', 'DOI'], keep='first'), df_all[
-    df_all.duplicated(subset=['Title', 'DOI'], keep=False)]
+# Descargar PDFs
+download_pdfs(df_unique)
 
-df_clean.to_csv('articles.csv', index=False)
+# Guardar en CSV
+df_unique.to_csv('articles.csv', index=False)
 df_duplicates.to_csv('duplicates.csv', index=False)
+
+# Cerrar WebDriver
+driver.quit()
 
 print("Datos extraídos y guardados en articles.csv y duplicates.csv")

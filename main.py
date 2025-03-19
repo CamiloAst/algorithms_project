@@ -15,8 +15,8 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 
 class AcademicScraper:
-    # brave_path = "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe"
-    # download_path = "C:/Users/jkami/Downloads"
+    brave_path = "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe"
+    download_path = "C:/Users/jkami/Downloads"
     def __init__(self, debug=True):
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
@@ -41,14 +41,14 @@ class AcademicScraper:
         self.chrome_options.add_argument("--disable-notifications")
         self.chrome_options.add_argument("--disable-popup-blocking")
         # self.chrome_options.binary_location = self.brave_path
-        # self.chrome_options.add_argument("--start-maximized")
-        # self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        # self.chrome_options.add_experimental_option('prefs', {
-        #     "download.default_directory": self.download_path,
-        #     "download.prompt_for_download": False,
-        #     "download.directory_upgrade": True,
-        #     "safebrowsing.enabled": True,
-        # })
+        self.chrome_options.add_argument("--start-maximized")
+        self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        self.chrome_options.add_experimental_option('prefs', {
+            "download.default_directory": self.download_path,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+        })
 
     def _log(self, message):
         """Función para imprimir mensajes de depuración"""
@@ -162,20 +162,122 @@ class AcademicScraper:
         finally:
             driver.quit()
 
+    def search_scienceDirect(self, query, max_pages=20):
+        self.chrome_options.binary_location = self.brave_path
+        self.chrome_options.add_argument("--start-maximized")
+        self.chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        self.chrome_options.add_experimental_option('prefs', {
+            "download.default_directory": self.download_path,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "safebrowsing.enabled": True,
+        })
+        """Realiza búsquedas en ScienceDirect (versión optimizada)"""
+        self._log(f"Buscando en ScienceDirect: {query}")
+
+        try:
+            # Inicializar WebDriver con manejador automático
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=self.chrome_options)
+
+            # Especificar el tiempo de espera implícito
+            driver.implicitly_wait(1)
+
+            # Preparar la URL de búsqueda adecuadamente
+            encoded_query = query.replace(' ', '+')
+            base_url = "https://www.sciencedirect.com/search"
+
+            for page in range(max_pages):
+                page_url = f"{base_url}?qs={encoded_query}&show=100&sortBy=relevance&articleTypes=FLA&offset={page + 1}"
+                self._log(f"Accediendo a: {page_url}")
+
+                try:
+                    driver.get(page_url)
+
+                    # Esperar a que se cargue la página
+                    time.sleep(3)
+
+                    # Verificar si hay algún tipo de modal o popup y cerrarlo si existe
+                    try:
+                        close_buttons = driver.find_elements(By.CSS_SELECTOR,
+                                                             "button.modal-close, button.close, .popup-close")
+                        for button in close_buttons:
+                            if button.is_displayed():
+                                button.click()
+                                time.sleep(0)
+                    except:
+                        pass
+
+                    articles = driver.find_elements(By.CSS_SELECTOR, ".ResultItem")
+
+                    if not articles:
+                        self._log("No se encontraron artículos en ScienceDirect con ningún selector conocido.")
+                        # Guardar la página para análisis
+                        driver.save_screenshot(f"sciencedirect_no_results_page_{page}.png")
+                        with open(f"sciencedirect_debug_page_{page}.html", "w", encoding="utf-8") as f:
+                            f.write(driver.page_source)
+                        continue
+
+                    # Procesar los artículos encontrados
+                    for article in articles:
+                        title_elem = article.find_element(By.CSS_SELECTOR, ".result-item-content h2 a")
+                        title = title_elem.text.strip()
+
+                        if 'href' in title_elem.get_attribute("outerHTML"):
+                            link = title_elem.get_attribute("href")
+                        else:
+                            link = "No disponible"
+
+                        # Buscar autores
+                        authors = "No disponible"
+                        try:
+                            if article.find_element(By.CSS_SELECTOR, ".Authors"):
+                                    authors_elem = article.find_element(By.CSS_SELECTOR, ".author-group")
+                                    authors = authors_elem.text.strip()
+                        except NoSuchElementException:
+                            pass
+
+                        date = "No disponible"
+                        date_elem = article.find_element(By.CSS_SELECTOR, ".srctitle-date-fields")
+                        date = date_elem.text.strip()
+                        if len(date) > 4:
+                            year_match = re.search(r'\b(19|20)\d{2}\b', date)
+                            if year_match:
+                                date = year_match.group(0)
+
+                        self.results.append({
+                            'Título': title,
+                            'Autores': authors,
+                            'Fecha': date,
+                            'URL': link,
+                        })
+                        self._log(
+                            f"Página {page + 1} de ScienceDirect completada. Artículos encontrados en total: {len(self.results)}")
+                        self._random_delay(0, 1)
+                except Exception as e:
+                    self._log(f"Error al procesar la página {page + 1} de ScienceDirect: {str(e)}")
+                    continue
+
+        except Exception as e:
+            self._log(f"Error general al procesar ScienceDirect: {str(e)}")
+            import traceback
+            self._log(traceback.format_exc())
+        finally:
+            driver.quit()
 
 
-    def search_all(self, query, max_pages=2):
-        """Realiza búsquedas en bases de datos que han demostrado ser más estables"""
+
+    def search_all(self, query, max_pages=183):
         # Limpiar resultados anteriores
         self.results = []
 
-        # IEEE Xplore (ha funcionado según los registros de errores)
+        # IEEE Xplore
         try:
             self.search_ieee(query, max_pages)
+            # self.search_scienceDirect(query, max_pages=456)
         except Exception as e:
-            self._log(f"Error completo en IEEE: {str(e)}")
+            self._log(f"Error completo en la base de datos: {str(e)}")
         return self.results
-
     def save_results(self, filename="articles.csv"):
         """Guarda los resultados en un archivo CSV"""
         if self.results:
@@ -205,7 +307,7 @@ if __name__ == "__main__":
 
     # Buscar el término específico
     query = "computational thinking"
-    resultados = scraper.search_all(query, max_pages=183)
+    resultados = scraper.search_all(query)
 
     # Guardar resultados
     archivo = scraper.save_results("articles.csv")

@@ -440,7 +440,7 @@ if __name__ == "__main__":
     resultados = scraper.search_all(query, max_pages=200)
 
     # Guardar resultados
-    archivo = scraper.save_results(f"{query.replace(' ', '_')}_resultados.csv")
+    archivo = scraper.save_results("articles.csv")
 
     # Mostrar muestra de resultados
     scraper.print_sample_results()
